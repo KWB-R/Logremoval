@@ -1,0 +1,136 @@
+---
+title: "Toleranzintervall ungepaart (Bayes)"
+author: "Wolfgang Seis"
+format: pdf
+editor: visual
+---
+
+
+## Zielstellung
+
+Das folgende Dokument dient als Hilfestellung für die Berechnung eines Bayes'schen Toleranzintervalls.
+
+## Schritt 1: Laden der notwendigen Packete
+
+Für die Durchführung der Bayes'schen Analyse wird das Paket brms verwendet.
+
+
+```{r}
+library(brms)
+#| echo: false
+
+
+```
+
+
+## Schritt 2: Generierung fiktiver Daten / Einlesen der Daten
+
+
+```{r}
+
+datentabelle <- data.frame(zulaufwerte = rlnorm(20, 16, 1),
+                   ablaufwerte = rep(0, 20))
+
+# Wenn tatsächliche Daten in der Datei "datentabelle.csv" vorliegen, kann die Raute "#" in der nächsten Zeile entfernt werden
+
+# data <- read.csv2("./datentabelle.csv")
+```
+
+
+## Schritt 3: Fitten eine lognormalverteilung auf vorhandenen Zulaufwerte
+
+
+```{r, results = 'hide'}
+
+
+control <- list(adapt_delta = 0.99)
+MCMC_iterations <- 4000
+
+Zulaufverteilung <- brms::brm(zulaufwerte ~ 1, 
+                              data = datentabelle, 
+                              family = "lognormal",
+                              iter = MCMC_iterations,
+                              control = control)
+
+```
+
+
+## Schritt 4: Fitten einer negativen Binomialverteilung auf vorhandene Ablaufwerte
+
+
+```{r, results = 'hide'}
+
+Ablaufverteilung <- brms::brm(ablaufwerte ~ 1, 
+                              data = datentabelle,
+                              family = "negbinomial2",
+                              iter = MCMC_iterations, 
+                              control = control)
+
+```
+
+
+## Schritt 5: Extrahieren der korrelierten Parameterwerte, Simulation von Zu- und Ablaufverteilungen, und 
+
+
+```{r}
+
+# Extrahieren der MCMC Werte von den jeweiligen Zu-und Ablaufverteilungen
+MCMC_zulauf <-  brms::as_draws_df(Zulaufverteilung)
+MCMC_ablauf <- brms::as_draws_df(Ablaufverteilung)
+Perzentilverteilung <- c(1:nrow(MCMC_zulauf))
+
+for(i in 1:nrow(MCMC_zulauf)){
+  # Generieren von 10000 Zufallswerten auf Basis der i-ten Zeile der MCMC-Werte
+  
+  # Zulauf
+  in_sim <- rlnorm(n = 10000, 
+                   meanlog = MCMC_zulauf$b_Intercept[i],
+                   sdlog = MCMC_zulauf$sigma[i])
+  # Ablauf
+  out_sim <- rnbinom(10000,
+               mu = exp(MCMC_ablauf$b_Intercept[i]),
+               size = MCMC_ablauf$sigma[i])+1
+  
+  # Berechnugn der Log10-Reduktionsverteilung aus 10000 Simulationswerten 
+  lrv <- log10(in_sim/out_sim)
+  
+  # Berechnung des 10. und 90. Perzentils
+  Perzentilverteilung[i] <- quantile(lrv, probs = c(0.1))
+}
+```
+
+
+## Schritt 6: Berechnung und Vizualisierung der unteren Toleranzgrenze und Perzentilverteilung
+
+
+```{r}
+library(ggplot2)
+
+
+alpha_value <- 0.05
+df <- data.frame(p = Perzentilverteilung)
+lower <- quantile(df$p, probs = c(alpha_value))
+
+
+ggplot(data = df, 
+       aes(x = p)) + 
+  geom_histogram(
+           fill = "steelblue") + 
+  geom_vline(xintercept = quantile(df$p, 
+                                   probs = c(alpha_value, 1-alpha_value)), 
+             lwd = 1, 
+             lty = 2, 
+             col = "red3") + 
+  annotate("text", x = quantile(df$p, 
+                                   probs = c(alpha_value))-0.3,
+           col = "red3",
+           size = 4,
+           #fontface="bold",
+           y = 700, 
+           label = bquote("TI"[.("U")]~"(P = 0,9"~alpha~"= 0,05)"~ "="*.(round(lower,1)))
+           ) +
+  labs(x = bquote("Log" [.("10")] ~ "Reduktion"), y= "Anzahl Simulationen") +
+  ggtitle("Verteilung des 10. Perzentils als Histogram")
+
+```
+
